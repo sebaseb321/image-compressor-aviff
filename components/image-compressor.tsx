@@ -8,8 +8,11 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
-import { Upload, Download, ImageIcon, Loader2, X } from "lucide-react"
+import { Upload, Download, ImageIcon, Loader2, X, Crop } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import Cropper from "react-easy-crop"
+import type { Area } from "react-easy-crop"
 
 interface CompressedImage {
   file: File
@@ -25,10 +28,165 @@ interface CompressedImage {
   height: string
 }
 
+interface CropState {
+  crop: { x: number; y: number }
+  zoom: number
+  croppedAreaPixels: Area | null
+}
+
+interface AspectRatioState {
+  type: "free" | "preset" | "custom"
+  value: number | undefined
+  customWidth: string
+  customHeight: string
+}
+
 export default function ImageCompressor() {
   const [images, setImages] = useState<CompressedImage[]>([])
   const { toast } = useToast()
   const previewTimeoutRefs = useRef<Map<number, NodeJS.Timeout>>(new Map())
+
+  const [cropModalOpen, setCropModalOpen] = useState(false)
+  const [currentCropIndex, setCurrentCropIndex] = useState<number | null>(null)
+  const [cropState, setCropState] = useState<CropState>({
+    crop: { x: 0, y: 0 },
+    zoom: 1,
+    croppedAreaPixels: null,
+  })
+
+  const [aspectRatio, setAspectRatio] = useState<AspectRatioState>({
+    type: "free",
+    value: undefined,
+    customWidth: "16",
+    customHeight: "9",
+  })
+
+  const presetAspectRatios = [
+    { label: "1:1 (Cuadrado)", value: 1 },
+    { label: "4:5 (Vertical)", value: 4 / 5 },
+    { label: "5:4 (Horizontal)", value: 5 / 4 },
+    { label: "16:9 (Panorámico)", value: 16 / 9 },
+    { label: "9:16 (Stories)", value: 9 / 16 },
+    { label: "3:2 (Fotografía)", value: 3 / 2 },
+    { label: "2:3 (Retrato)", value: 2 / 3 },
+  ]
+
+  const calculateCustomAspectRatio = (): number | undefined => {
+    const width = Number.parseFloat(aspectRatio.customWidth)
+    const height = Number.parseFloat(aspectRatio.customHeight)
+    if (width > 0 && height > 0) {
+      return width / height
+    }
+    return undefined
+  }
+
+  const getCurrentAspectRatio = (): number | undefined => {
+    if (aspectRatio.type === "free") return undefined
+    if (aspectRatio.type === "preset") return aspectRatio.value
+    if (aspectRatio.type === "custom") return calculateCustomAspectRatio()
+    return undefined
+  }
+
+  const createCroppedImage = async (imageSrc: string, croppedAreaPixels: Area): Promise<{ file: File; blob: Blob }> => {
+    const image = await createImageBitmap(await fetch(imageSrc).then((r) => r.blob()))
+    const canvas = document.createElement("canvas")
+    const ctx = canvas.getContext("2d")
+
+    if (!ctx) {
+      throw new Error("No se pudo obtener el contexto del canvas")
+    }
+
+    canvas.width = croppedAreaPixels.width
+    canvas.height = croppedAreaPixels.height
+
+    ctx.drawImage(
+      image,
+      croppedAreaPixels.x,
+      croppedAreaPixels.y,
+      croppedAreaPixels.width,
+      croppedAreaPixels.height,
+      0,
+      0,
+      croppedAreaPixels.width,
+      croppedAreaPixels.height,
+    )
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("Error al crear la imagen recortada"))
+          return
+        }
+        const file = new File([blob], "cropped-image.png", { type: "image/png" })
+        resolve({ file, blob })
+      }, "image/png")
+    })
+  }
+
+  const openCropModal = (index: number) => {
+    setCurrentCropIndex(index)
+    setCropState({
+      crop: { x: 0, y: 0 },
+      zoom: 1,
+      croppedAreaPixels: null,
+    })
+    setAspectRatio({
+      type: "free",
+      value: undefined,
+      customWidth: "16",
+      customHeight: "9",
+    })
+    setCropModalOpen(true)
+  }
+
+  const applyCrop = async () => {
+    if (currentCropIndex === null || !cropState.croppedAreaPixels) return
+
+    const img = images[currentCropIndex]
+    if (!img) return
+
+    try {
+      const { file, blob } = await createCroppedImage(img.preview, cropState.croppedAreaPixels)
+
+      const newPreview = URL.createObjectURL(blob)
+      const dimensions = await getImageDimensions(file)
+
+      setImages((prev) => {
+        const newImages = [...prev]
+        URL.revokeObjectURL(newImages[currentCropIndex].preview)
+        if (newImages[currentCropIndex].compressedPreview) {
+          URL.revokeObjectURL(newImages[currentCropIndex].compressedPreview!)
+        }
+
+        newImages[currentCropIndex] = {
+          ...newImages[currentCropIndex],
+          file,
+          preview: newPreview,
+          originalSize: blob.size,
+          dimensions,
+          compressedPreview: undefined,
+          compressed: undefined,
+          compressedSize: undefined,
+        }
+        return newImages
+      })
+
+      setCropModalOpen(false)
+      setCurrentCropIndex(null)
+
+      toast({
+        title: "¡Éxito!",
+        description: "Imagen recortada correctamente",
+      })
+    } catch (error) {
+      console.error("Error al recortar:", error)
+      toast({
+        title: "Error",
+        description: "Hubo un problema al recortar la imagen",
+        variant: "destructive",
+      })
+    }
+  }
 
   const compressImageWithJSquash = async (
     file: File,
@@ -400,7 +558,18 @@ export default function ImageCompressor() {
 
                 <div className="grid lg:grid-cols-2 gap-6 mb-6">
                   <div className="space-y-2">
-                    <p className="text-sm font-medium text-muted-foreground">Original</p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium text-muted-foreground">Original</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openCropModal(index)}
+                        disabled={img.processing}
+                      >
+                        <Crop className="w-4 h-4 mr-2" />
+                        Recortar
+                      </Button>
+                    </div>
                     <div className="relative w-full bg-muted rounded-lg overflow-hidden" style={{ minHeight: "400px" }}>
                       <img
                         src={img.preview || "/placeholder.svg"}
@@ -506,6 +675,116 @@ export default function ImageCompressor() {
           })}
         </div>
       )}
+
+      <Dialog open={cropModalOpen} onOpenChange={setCropModalOpen}>
+        <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Recortar imagen</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 border-b pb-4">
+            <Label className="text-base font-semibold">Relación de aspecto</Label>
+
+            {/* Free crop button */}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={aspectRatio.type === "free" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setAspectRatio({ ...aspectRatio, type: "free", value: undefined })}
+              >
+                Libre
+              </Button>
+
+              {/* Preset aspect ratio buttons */}
+              {presetAspectRatios.map((preset) => (
+                <Button
+                  key={preset.label}
+                  variant={aspectRatio.type === "preset" && aspectRatio.value === preset.value ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setAspectRatio({ ...aspectRatio, type: "preset", value: preset.value })}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+
+            {/* Custom aspect ratio inputs */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={aspectRatio.type === "custom" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setAspectRatio({ ...aspectRatio, type: "custom" })}
+                >
+                  Personalizado
+                </Button>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    placeholder="Ancho"
+                    value={aspectRatio.customWidth}
+                    onChange={(e) => setAspectRatio({ ...aspectRatio, customWidth: e.target.value, type: "custom" })}
+                    className="w-20"
+                    min="1"
+                    step="0.1"
+                  />
+                  <span className="text-muted-foreground">:</span>
+                  <Input
+                    type="number"
+                    placeholder="Alto"
+                    value={aspectRatio.customHeight}
+                    onChange={(e) => setAspectRatio({ ...aspectRatio, customHeight: e.target.value, type: "custom" })}
+                    className="w-20"
+                    min="1"
+                    step="0.1"
+                  />
+                  {aspectRatio.type === "custom" && calculateCustomAspectRatio() && (
+                    <span className="text-sm text-muted-foreground">
+                      (≈ {calculateCustomAspectRatio()?.toFixed(2)})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Introduce proporciones personalizadas (ej: 21:9 para ultra panorámico)
+              </p>
+            </div>
+          </div>
+
+          <div className="relative flex-1 bg-muted rounded-lg overflow-hidden" style={{ minHeight: "400px" }}>
+            {currentCropIndex !== null && images[currentCropIndex] && (
+              <Cropper
+                image={images[currentCropIndex].preview}
+                crop={cropState.crop}
+                zoom={cropState.zoom}
+                aspect={getCurrentAspectRatio()}
+                onCropChange={(crop) => setCropState((prev) => ({ ...prev, crop }))}
+                onZoomChange={(zoom) => setCropState((prev) => ({ ...prev, zoom }))}
+                onCropComplete={(_, croppedAreaPixels) => setCropState((prev) => ({ ...prev, croppedAreaPixels }))}
+              />
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Zoom: {Math.round(cropState.zoom * 100)}%</Label>
+            <Slider
+              value={[cropState.zoom]}
+              onValueChange={(value) => setCropState((prev) => ({ ...prev, zoom: value[0] }))}
+              min={1}
+              max={3}
+              step={0.1}
+              className="w-full"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCropModalOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={applyCrop}>Aplicar recorte</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
