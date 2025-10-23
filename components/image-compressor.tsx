@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Upload, Download, ImageIcon, Loader2, X } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
-interface ImageData {
+interface CompressedImage {
   file: File
   preview: string
   compressedPreview?: string
@@ -26,7 +26,7 @@ interface ImageData {
 }
 
 export default function ImageCompressor() {
-  const [images, setImages] = useState<ImageData[]>([])
+  const [images, setImages] = useState<CompressedImage[]>([])
   const { toast } = useToast()
   const previewTimeoutRefs = useRef<Map<number, NodeJS.Timeout>>(new Map())
 
@@ -39,7 +39,7 @@ export default function ImageCompressor() {
   ): Promise<{ blob: Blob; dimensions: { width: number; height: number } }> => {
     const { encode } = await import("@jsquash/avif")
 
-    let imageData: ImageData
+    let canvasImageData: ImageData
     let finalWidth = 0
     let finalHeight = 0
 
@@ -66,7 +66,7 @@ export default function ImageCompressor() {
       if (!ctx) throw new Error("No se pudo obtener el contexto del canvas")
       ctx.drawImage(img, 0, 0, finalWidth, finalHeight)
 
-      imageData = ctx.getImageData(0, 0, finalWidth, finalHeight)
+      canvasImageData = ctx.getImageData(0, 0, finalWidth, finalHeight)
     } else {
       const canvas = document.createElement("canvas")
       canvas.width = img.width
@@ -74,10 +74,10 @@ export default function ImageCompressor() {
       const ctx = canvas.getContext("2d")
       if (!ctx) throw new Error("No se pudo obtener el contexto del canvas")
       ctx.drawImage(img, 0, 0)
-      imageData = ctx.getImageData(0, 0, img.width, img.height)
+      canvasImageData = ctx.getImageData(0, 0, img.width, img.height)
     }
 
-    const avifData = await encode(imageData, {
+    const avifData = await encode(canvasImageData, {
       quality: targetQuality,
       speed: isPreview ? 8 : 4,
     })
@@ -111,7 +111,7 @@ export default function ImageCompressor() {
         return
       }
 
-      const newImages: ImageData[] = await Promise.all(
+      const newImages: CompressedImage[] = await Promise.all(
         files.map(async (file) => ({
           file,
           preview: URL.createObjectURL(file),
@@ -130,7 +130,7 @@ export default function ImageCompressor() {
 
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
-    const newImages: ImageData[] = await Promise.all(
+    const newImages: CompressedImage[] = await Promise.all(
       files.map(async (file) => ({
         file,
         preview: URL.createObjectURL(file),
@@ -208,7 +208,7 @@ export default function ImageCompressor() {
     }
   }
 
-  const downloadImage = (img: ImageData, index: number) => {
+  const downloadImage = (img: CompressedImage, index: number) => {
     if (!img.compressed) return
 
     const url = URL.createObjectURL(img.compressed)
@@ -229,7 +229,7 @@ export default function ImageCompressor() {
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i]
   }
 
-  const calculateFinalDimensions = (img: ImageData) => {
+  const calculateFinalDimensions = (img: CompressedImage) => {
     if (!img.dimensions) return null
 
     const targetWidth = img.width ? Number.parseInt(img.width) : null
