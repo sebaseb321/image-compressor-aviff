@@ -1,7 +1,7 @@
 {
-  "build": {
-    "command": "npm run build",
-    "output": ".next"
-  },
-  "framework": "next"
+// next.config.ts
+module.exports = {
+  basePath: "/app",
+  assetPrefix: "/app",
+};
 }
