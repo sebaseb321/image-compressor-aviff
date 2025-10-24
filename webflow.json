@@ -1,7 +1,5 @@
 {
-// next.config.ts
-module.exports = {
-  basePath: "/app",
-  assetPrefix: "/app",
-};
+  "cloud": {
+    "framework": "nextjs"
+  }
 }
